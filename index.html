@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spaceback — Support</title>
+<meta name="description" content="Support and help for Spaceback, the honest macOS storage cleaner.">
+<style>
+  :root{--violet:#7a4fe0;--violet2:#9b6cff;--gold:#f0b95a;--ink:#0e0a1c;--card:#1a1336;--text:#ede9ff;--muted:#b6aede;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Segoe UI",system-ui,sans-serif;
+    background:radial-gradient(1200px 600px at 20% -10%,#3a2483 0,transparent 60%),
+               radial-gradient(900px 500px at 100% 110%,#5a3a1f 0,transparent 55%),var(--ink);
+    color:var(--text);line-height:1.6;min-height:100vh;padding:48px 20px}
+  .wrap{max-width:760px;margin:0 auto}
+  .logo{width:84px;height:84px;border-radius:22px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(150deg,var(--violet),var(--gold));font-size:44px;box-shadow:0 12px 40px rgba(122,79,224,.45);margin-bottom:22px}
+  h1{font-size:40px;letter-spacing:-.5px;margin-bottom:6px}
+  .tag{color:var(--muted);font-size:18px;margin-bottom:36px}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));
+    border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px 30px;margin-bottom:22px}
+  h2{font-size:22px;margin-bottom:12px}
+  .btn{display:inline-block;margin-top:8px;background:linear-gradient(120deg,var(--violet2),var(--violet));
+    color:#fff;text-decoration:none;font-weight:600;padding:13px 24px;border-radius:14px;box-shadow:0 8px 24px rgba(122,79,224,.4)}
+  .faq{margin-top:8px}
+  .faq details{border-top:1px solid rgba(255,255,255,.08);padding:14px 0}
+  .faq details:first-child{border-top:none}
+  .faq summary{font-weight:600;cursor:pointer;list-style:none;font-size:16.5px}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::before{content:"+";color:var(--gold);margin-right:10px;font-weight:700}
+  .faq details[open] summary::before{content:"–"}
+  .faq p{color:var(--muted);margin-top:8px}
+  a{color:var(--gold)}
+  footer{color:var(--muted);font-size:14px;text-align:center;margin-top:30px}
+  .pill{display:inline-flex;gap:8px;align-items:center;background:rgba(240,185,90,.12);color:var(--gold);
+    border:1px solid rgba(240,185,90,.3);padding:5px 12px;border-radius:999px;font-size:13px;font-weight:600;margin-bottom:18px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">👻</div>
+    <span class="pill">macOS 14+ · Free with a one-time Pro unlock</span>
+    <h1>Spaceback</h1>
+    <p class="tag">Reclaim disk space, honestly. Support &amp; help.</p>
+
+    <div class="card">
+      <h2>Need a hand?</h2>
+      <p>Email us with your question, your macOS version, and what you were doing — we read every message and usually reply within a couple of business days.</p>
+      <a class="btn" href="mailto:vlada.misici@datagroup.ro?subject=Spaceback%20Support">Email Spaceback Support</a>
+    </div>
+
+    <div class="card">
+      <h2>Frequently asked</h2>
+      <div class="faq">
+        <details open><summary>How do I scan my Mac?</summary><p>On the first screen, choose “Scan my whole Mac” or “Pick a folder”, then grant access in the macOS panel. Spaceback can only read folders you explicitly allow — it’s a sandboxed App Store app.</p></details>
+        <details><summary>Where do deleted files go?</summary><p>Every removal moves the file to the Trash, so nothing is ever permanently lost until you empty it yourself. You can restore anything at any time.</p></details>
+        <details><summary>What does Pro unlock?</summary><p>A one-time purchase (no subscription, ever) that adds exact-duplicate cleanup, photo-clutter cleanup (look-alikes &amp; screenshots), whole-Mac scans and automation. Free already includes large &amp; old files, Downloads cleanup, the storage map and Trash.</p></details>
+        <details><summary>How do I restore my Pro purchase on a new Mac?</summary><p>Open Settings inside Spaceback and tap “Restore”, or “Restore Purchases” on the unlock screen. It re-checks your App Store account and restores Pro instantly.</p></details>
+        <details><summary>Do you collect any of my data?</summary><p>No. Everything runs on your Mac — no account, no network, no analytics, no tracking. See our <a href="privacy.html">Privacy Policy</a>.</p></details>
+      </div>
+    </div>
+
+    <footer>
+      <a href="privacy.html">Privacy Policy</a> · © 2026 Spaceback
+    </footer>
+  </div>
+</body>
+</html>
