@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spaceback Link Protocol</title>
+<meta name="description" content="The published cryptographic protocol of Spaceback Link, version 1: pairing and session.">
+<style>
+:root{--bg:#ffffff;--fg:#1d1d1f;--muted:#6e6e73;--code:#f5f5f7;--rule:#d2d2d7;--link:#0066cc}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0b0b0f;--fg:#f5f5f7;--muted:#a1a1a6;--code:#1c1c21;--rule:#38383d;--link:#4da3ff}}
+:root[data-theme="dark"]{--bg:#0b0b0f;--fg:#f5f5f7;--muted:#a1a1a6;--code:#1c1c21;--rule:#38383d;--link:#4da3ff}
+body{background:var(--bg);color:var(--fg);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;margin:0;padding:32px 16px 64px}
+main{max-width:820px;margin:0 auto}
+h1{font-size:30px;margin:0 0 12px} h2{margin-top:44px;padding-top:12px;border-top:1px solid var(--rule)} h3{margin-top:32px}
+a{color:var(--link)} code{background:var(--code);padding:1px 5px;border-radius:5px;font:13.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--code);padding:14px 16px;border-radius:10px;overflow-x:auto} pre code{padding:0;background:none;font-size:12.5px}
+li{margin:4px 0} footer{margin-top:56px;color:var(--muted);font-size:14px;border-top:1px solid var(--rule);padding-top:16px}
+</style></head><body><main>
+<h1>Spaceback Link protocol, version 1</h1>
+<p><strong>Pairing and session cryptography.</strong> Published 27 September 2026. Applies to Spaceback for Mac 2.3 and Spaceback for iPhone and iPad 1.3, and later versions that speak Link protocol major version 1.</p>
+<p>Spaceback Link connects Spaceback on an iPhone with Spaceback on a Mac over the local network, so each device can show what the other found. This page publishes the cryptographic parts of that protocol in full: how two devices pair, how they open an encrypted session, and how records are protected.</p>
+<p>Every primitive comes from Apple CryptoKit: X25519, Ed25519, P-256 in the Secure Enclave, SHA-256, HMAC-SHA256, HKDF-SHA256 and ChaCha20-Poly1305. The session handshake is exactly <code>Noise_KKpsk2_25519_ChaChaPoly_SHA256</code> from the <a href="https://noiseprotocol.org/noise.html">Noise Protocol Framework</a>, revision 34. The pairing exchange that establishes the Noise pre-shared key is described in section 2.2.</p>
+<p>Section numbers follow Spaceback's internal specification, which this page quotes. Tags such as (A10) or (revision 3.2) mark where a later amendment changed a rule. "iPhone" and "Mac" name the two roles: the iPhone is the initiator (I) and the Mac the responder (R).</p>
+<h2>Notation</h2>
+<ul>
+<li><code>H</code> = SHA-256. <code>HKDF(ikm, salt, info, n)</code> = <code>HKDF&lt;SHA256&gt;.deriveKey(inputKeyMaterial:salt:info:outputByteCount:)</code>. <code>HMAC(k, m)</code> = <code>HMAC&lt;SHA256&gt;</code>.</li>
+<li><code>lp(x)</code> = u32 big-endian length ‖ x. <code>‖</code> = plain concatenation. Every variable-length field inside a hashed, MACed or signed message is written with <code>lp</code>; fixed-size fields (keys, digests, integers) are not.</li>
+<li><code>wire(Pn)</code> = the exact bytes of frame Pn on the wire, header and body.</li>
+<li>AEAD nonce, everywhere in this document: 4 zero bytes ‖ u64 <strong>little-endian</strong> counter, as in Noise §12.3 for ChaChaPoly. One encoding for pairing, handshake and records.</li>
+</ul>
+<h2>Design decisions</h2>
+<p><strong>Pairing.</strong> X25519 key exchange in which the responder commits first. The 6-digit SAS is derived only from values fixed by the commit/reveal exchange. The Mac shows the SAS, and the user <strong>types it on the iPhone</strong>, which checks it against its own value. The Mac user then clicks Allow on a sheet that repeats the code. No identity, name or long-term key crosses before the typed code matches. Each device decides grants over its own data.</p>
+<p><strong>Sessions.</strong> Exactly <code>Noise_KKpsk2_25519_ChaChaPoly_SHA256</code> (Noise §7.5 KK, §9 psk modifier), built from CryptoKit primitives and checked against published vectors, followed by ChaCha20-Poly1305 records. It is testable without sockets and gives forward secrecy.</p>
+<h2>2. Pairing</h2>
+<h3>2.1 Identity keys</h3>
+<p><strong><code>sign</code></strong> (<code>Curve25519.Signing</code>) is the root identity, and <code>peerID = H(sign.pub)[..16]</code>. <strong><code>agree</code></strong> (<code>Curve25519.KeyAgreement</code>) is the static DH key, certified by <code>sign</code> and proven by the first handshake (§2.2 step 9).</p>
+<p><strong><code>approve</code></strong> (iPhone only) is <code>SecureEnclave.P256.Signing.PrivateKey(accessControl:authenticationContext:)</code>.</p>
+<ul>
+<li><strong>Access control:</strong> <code>SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .biometryCurrentSet], nil)</code>. The CryptoKit default (<code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>, no flags) is never used.</li>
+<li><strong><code>approveMode</code></strong> is <code>.biometry</code> or <code>.none</code>. There is no passcode mode. With no biometry enrolled, no <code>approve</code> key exists, <code>approveMode = .none</code>, and <code>mac.trash</code> cannot be turned on (§5.1).</li>
+<li><strong>Biometry change</strong> invalidates the key. The iPhone may create a new one only after a fresh <code>.deviceOwnerAuthenticationWithBiometrics</code> evaluation, and sends it with <code>keyUpdate</code>. The Mac then applies the <code>approveKeyPending</code> rule (§2.6). A notification alone is never enough.</li>
+<li><strong>What <code>approve</code> protects.</strong> It stops someone who holds the iPhone but cannot pass its biometry from approving Trash moves through the genuine app. The Mac cannot verify cryptographically that <code>approve.pub</code> lives in a Secure Enclave or is biometry-gated: <code>approveMode</code> is self-reported by a device the user paired. The Mac-side pending rule covers key changes after pairing.</li>
+<li><strong>Tests:</strong> the Simulator uses <code>FakeApprover</code> (<code>SecureEnclave.isAvailable</code> is false there).</li>
+</ul>
+<h3>2.2 Flow</h3>
+<pre><code>P0 I→R PairHello   {v, minors, mode: ble|bleReversed|code|digits}                        plaintext ≤4 KiB
+       R: v ≠ major, or minors ∩ local minors = ∅ → abort(.versionTooOld), before P1, not counted
+P1 R→I PairCommit  {c = H(&quot;SBL1 commit&quot; ‖ eR.pub ‖ nR)}                                  nR: 32 random bytes
+P2 I→R PairRevealI {eI.pub, nI, tp = HMAC(token, &quot;SBL1 token&quot; ‖ H(lp(wire P0) ‖ lp(wire P1)) ‖ eI.pub)[..16]}
+       R: tp invalid for the current token/code → silent close after 0–300 ms; not counted (§2.3)
+P3 R→I PairRevealR {eR.pub, nR}                   I checks c, else abort(.commitMismatch)
+       ── the attempt is now CONSUMED on both devices (§2.3) ──
+   dh  = X25519(eI, eR)                          any throw → abort(.invalidKey)
+   T0  = H(lp(wire P0) ‖ lp(wire P1) ‖ lp(wire P2) ‖ lp(wire P3))
+   SAS = UInt64(bigEndian: HKDF(dh, T0, &quot;SpacebackLink v1 SAS&quot;, 8)) % 1_000_000         → &quot;482 913&quot;
+   kI  = HKDF(dh, T0, &quot;SpacebackLink v1 pairing I-&gt;R&quot;, 32);  kR = HKDF(dh, T0, &quot;SpacebackLink v1 pairing R-&gt;I&quot;, 32)
+   cI  = HKDF(dh, T0, &quot;SpacebackLink v1 confirm I&quot;, 32);     cR = HKDF(dh, T0, &quot;SpacebackLink v1 confirm R&quot;, 32)
+
+   Mac shows &quot;Type this code on your iPhone: 482 913&quot;. iPhone shows a 6-digit entry field.
+   iPhone compares typed code with its SAS in constant time; 3 wrong entries end the attempt.
+
+   PairCodeRejected / PairExtend may precede P4 in either direction (A10, A1); each is a sealed frame
+   and each advances that direction's counter.
+P4 I→R Seal(kI) PairConfirmI {mac = HMAC(cI, &quot;SBL1 confirm I&quot; ‖ T0), identityI}           sent only after a match
+       IdentityI = {sign.pub, agree.pub, approve.pub?, approveMode, cls, name, modelClass, osMajor, appVersion,
+                    caps, installID,
+                    sig = Ed25519(signI, &quot;SBL1 identity I&quot; ‖ T0 ‖ agree.pub ‖ lp(approve.pub or empty)
+                                         ‖ u8 approveMode ‖ u8 cls)}
+   R verifies mac, the identity (PROTOCOL-TV B7: known model, canonical caps, 16-byte installID, known
+   cls, sig, pair and window, cls ↔ modelClass, `tv` cap for a TV pair; only a phone may carry an
+   approval key), then shows Allow, where its user names the peer (§2.2.1, PROTOCOL-TV B20)
+P5 R→I Seal(kR) PairAccept {mac = HMAC(cR, &quot;SBL1 confirm R&quot; ‖ T0 ‖ H(ct4)), identityR, macGrants}
+       IdentityR = {sign.pub, agree.pub, cls, name, accountName, modelClass, osMajor, appVersion, caps, installID,
+                    sig = Ed25519(signR, &quot;SBL1 identity R&quot; ‖ T0 ‖ signI.pub ‖ agree.pub ‖ u16 macGrants ‖ u8 cls)}
+       u8 cls: phone 1, tv 2, mac 3 (the B2 rank). `macGrants` is R's own grants, whatever R's class.
+       `name` is sent only by a Mac (its localized host name) and `accountName` only by a Mac; a phone or
+       a TV sends &quot;&quot; for both. The receiver sanitises a name and never takes one from a non-Mac.
+   I verifies as R did after P4, shows &quot;Linking to &lt;accountName&gt; on &lt;name&gt;&quot; and its own grant screen (§2.2.1)
+P6 I→R Seal(kI) PhoneGrants {u16 phoneGrants}                      I's own grants, whatever I's class
+   T1 = H(T0 ‖ lp(ct4) ‖ lp(ct5) ‖ lp(ct6))
+   pairSecret = HKDF(dh, T1, &quot;SpacebackLink v1 pairing secret&quot;, 32)
+S1–S3 on this same connection: §3.1 with psk = pairSecret, keyEpoch 0
+   R persists PeerRecord + PeerSecrets on a valid S3, then sends record `linkReady`
+   I persists on `linkReady`. Both play the linked ceremony.
+PairAbort{reason}: plaintext only before P3; after P3 always Seal(kI|kR). A plaintext PairAbort after P3 is ignored.
+</code></pre>
+<p><strong>Sealing (A10, LINK-SPEC §3.1).</strong> <code>Seal(k)</code> is ChaChaPoly with the nonce defined in the notation section and the 8-byte frame header as AAD. Two rules that P§2.2 previously left implicit are now fixed:</p>
+<ul>
+<li><strong>Body shape.</strong> Every sealed pairing plaintext is <code>u8 msg ‖ JSON</code>, with <code>msg</code> = <code>0x01</code> <code>PairConfirmI</code> (P4), <code>0x02</code> <code>PairAccept</code> (P5), <code>0x03</code> <code>PhoneGrants</code> (P6), <code>0x04</code> <code>PairAbort</code>, <code>0x05</code> <code>PairExtend</code>, <code>0x06</code> <code>PairCodeRejected</code>. An unknown <code>msg</code> is a sealed-frame failure: the attempt aborts and counts.</li>
+<li><strong>Counter.</strong> Each direction keeps <strong>one</strong> counter per pairing key, starting at 0 and incremented by 1 for every sealed frame sent in that direction, in send order, whatever its <code>msg</code>. P4 therefore uses counter <em>n</em>, where <em>n</em> is the number of sealed I→R frames sent before it — 0, 1 or 2 rejections, plus any <code>PairExtend</code>.</li>
+</ul>
+<p><code>ct4</code>, <code>ct5</code> and <code>ct6</code> are the sealed bodies, including their tags.</p>
+<p><strong><code>PairCodeRejected{attemptsLeft: u8}</code> (A10).</strong> The iPhone sends it after a wrong typed code so the Mac can mirror the miss ("That didn't match on your iPhone. 2 tries left."). Without a frame the Mac cannot know, and a Mac that silently keeps showing the same code while the user fails on the phone is the failure mode this closes.</p>
+<ul>
+<li><strong>Rules.</strong> Only the iPhone sends it, only after P3 and before P4, at most <strong>2</strong> per attempt, with <code>attemptsLeft</code> equal to 2 and then 1. The third miss sends a sealed <code>PairAbort{reason: codeMismatch}</code> instead. The Mac aborts — sealed, counted as a failure — on a third <code>PairCodeRejected</code>, on a repeated or wrong <code>attemptsLeft</code>, or on one arriving from the wrong direction. One arriving after a valid P4 is decrypted, to keep the counter aligned, and then ignored. A plaintext <code>0x01</code> frame carrying it after P3 is ignored, exactly like a plaintext <code>PairAbort</code>. It does not restart either device's code-entry timer.</li>
+<li><strong>Not in the transcript.</strong> <code>T1</code> stays <code>H(T0 ‖ lp(ct4) ‖ lp(ct5) ‖ lp(ct6))</code>. The sequence is already authenticated by the counter: a dropped, reordered or injected sealed frame shifts it, so P4 (or the next frame) fails to decrypt and the attempt ends as a consumed failure. The code count is UX information from the device that holds <code>kI</code>, not a security input, so the existing <code>T1</code> and <code>pairSecret</code> vectors stay valid.</li>
+</ul>
+<p><strong>Payload checks.</strong></p>
+<ul>
+<li>Each side rejects a peer whose <code>sign.pub</code> equals its own.</li>
+<li>Each side rejects any public key that fails to parse.</li>
+<li>The Mac rejects <code>approve.pub</code> unless it parses as a P256 x9.63 key, and rejects <code>approveMode == .biometry</code> with no <code>approve.pub</code> (there would be nothing to verify an approval against). Both end the attempt as <code>.invalidKey</code>.</li>
+<li>A peer's grant report is cut to the half that peer owns: the Mac keeps only <code>phone.*</code> from P6, and the iPhone only <code>mac.*</code> from P5 (§5.1).</li>
+<li>Pairing payloads are JSON with sorted keys, and <code>u16</code> grant fields use the fixed bit order of §5.1.</li>
+</ul>
+<p><strong>Why nothing after P3 can steer the SAS.</strong> The SAS depends only on <code>dh</code> and <code>T0</code>, and both are fixed once P3 is sent:</p>
+<ul>
+<li>R committed to <code>eR</code> and <code>nR</code> in P1, before seeing <code>eI</code>.</li>
+<li>I chose <code>eI</code> after P1 and before seeing <code>eR</code>.</li>
+</ul>
+<p>A MITM acting as R toward the iPhone must commit before learning <code>eI</code>. Acting as I toward the Mac, it must reveal its key before learning <code>eR</code>. So each leg's SAS is uniform to the attacker until that leg's P3, and nothing sent afterwards (identities, names, grants, randomised Ed25519 signatures) is an input to it. What remains to the attacker is repeated draws, and §2.3 counts each one.</p>
+<p>After a match, P4–P6 are authenticated by the AEAD under <code>kI</code>/<code>kR</code> and by the confirm MACs, and <code>T1</code> binds them into <code>pairSecret</code>. A unit test pins the SAS function's signature to <code>(dh, wire P0…P3)</code>.</p>
+<p><strong>Why identities come after the code.</strong> Before a match, a peer is unauthenticated, so it learns no name, no model, no OS or app version and no long-term public key. The honest iPhone sends <code>IdentityI</code> only after the user has typed the code from the screen they are looking at. The Mac sends <code>IdentityR</code> only after its user clicks Allow.</p>
+<p><strong>Timeouts.</strong> They are the same values as §3.7:</p>
+<ul>
+<li>first frame within 3 s of accept;</li>
+<li>P0–P3 complete within 5 s;</li>
+<li><strong>code entry 120 s (A1, LINK-SPEC §3.1</strong>, raised from 60 s for WCAG 2.2.1);</li>
+<li>Allow 120 s;</li>
+<li>iPhone grant screen 120 s;</li>
+<li><strong>securing 10 s (revision 3.2)</strong>: from a device's last pairing frame (P6 sent on the iPhone, P6 received on the Mac) until it reports <code>linked</code>. It covers S1–S3, the persist and <code>linkReady</code>. When it runs out, or the connection drops in it, the attempt ends as an interruption (<code>dropped(afterConsume: true)</code>, F15), and whatever that device had persisted in the phase is removed again.</li>
+</ul>
+<p><strong>Extensions (A1).</strong> Code entry and Allow can each be extended <strong>once</strong> by +120 s, with a new sealed frame <code>PairExtend{phase: codeEntry|allow}</code> (kind <code>0x04</code>, <code>msg</code> <code>0x05</code>, allowed once per phase per attempt). Both devices restart that phase's timer on send or on receipt; a second extension for the same phase is refused and the phase times out. Lengthening a timer costs nothing: the MITM bound in §2.3 is counted in consumed attempts, not in wall-clock time.</p>
+<p><strong>Extension receipt (revision 3.1).</strong> A <code>PairExtend</code> is sent whichever device the user extended on, in every phase it applies to — including the Mac during code entry and the iPhone while it waits for Allow — and every wait that can receive one applies it. If both devices extend the same phase and the two frames cross, the received one is absorbed, because both asked for the same thing; a second <em>local</em> extension of a phase that was already extended still ends the attempt as a timeout.</p>
+<p><strong>Leaving mid-ceremony (F21/F22, revision 3.1).</strong> Past P3, a device whose app leaves sends a sealed <code>PairAbort{reason}</code> before it closes, in every phase: <code>cancelled</code> when the Mac window closes or the app quits, <code>backgrounded</code> when the iPhone leaves, <code>ambiguous</code>/<code>limitReached</code> when the Mac ends the attempt for those reasons. The other device reports the reason (<code>cancelledOnMac</code>, <code>leftApp</code>, <code>ambiguous</code>, <code>limitReached</code>), never a bare drop, and acts on it at once in every wait — including the Mac's Allow sheet and the iPhone's grant screen, which previously ran out their 120 s. On the grant screen, <code>backgrounded</code> is sent as itself and every other cancel as <code>declinedGrants</code> ("Don't link").</p>
+<p>Any abort or timeout wipes the ephemeral keys, <code>dh</code> and every derived key.</p>
+<p><strong>Hand-over to the session (revision 3.2, WP2F2).</strong> Pairing and the session share one connection, and the iPhone sends S1 straight after P6, so S1 can reach the Mac before the Mac has finished handling P6 — over TCP the two often arrive in one read. The receiving side therefore routes frames <strong>by kind</strong> until its session takes the connection:</p>
+<ul>
+<li>While pairing runs, only kinds <code>0x01</code> and <code>0x04</code> are pairing messages. The first frame of kind <code>0x02</code> or <code>0x03</code> ends pairing delivery for good: it and every frame after it, of any kind, are kept in arrival order for the session.</li>
+<li>A session frame that arrives while a device still expects a pairing message (before P6 on the Mac, at any point on the iPhone) is out of order, and the attempt ends as <code>dropped</code>.</li>
+<li>A pairing frame that arrives after a session frame is the session's to read, and it refuses it.</li>
+<li>The iPhone is not exposed to the mirror-image race: the Mac sends nothing of the session until it has read S1, and the iPhone switches its reader over before it sends S1. What can cross P6 is a sealed <code>PairAbort</code> from the Mac; during securing the iPhone still opens it and reports its reason.</li>
+<li>A device that is cancelled during securing (F21/F22) closes the connection without a sealed abort, because the peer is already reading session frames; the peer reports an interruption.</li>
+</ul>
+<p><strong>Persist order (revision 3.2).</strong> The implementation now follows the flow above literally: the Mac persists the psk and local secrets only after <code>LinkSession.open</code> has verified S3, then sends <code>linkReady</code>; the iPhone persists only after <code>linkReady</code> has arrived. Revision 3.1's code persisted both before S1, so a handshake that failed left secrets behind for a link that never came up. A persist that fails, or a <code>linkReady</code> that cannot be sent, removes what was written (<code>KeyStore.removeAll(for:)</code>).</p>
+<h2>3. Sessions</h2>
+<h3>3.1 Handshake: <code>Noise_KKpsk2_25519_ChaChaPoly_SHA256</code></h3>
+<p>The implementation follows Noise exactly (§5 processing rules, §7.5 <code>KK</code>, §9 <code>psk2</code>) using CryptoKit:</p>
+<ul>
+<li><code>DH</code> is <code>Curve25519.KeyAgreement</code>, and any throw aborts with <code>.invalidKey</code>.</li>
+<li><code>HASH</code> is <code>SHA256</code>.</li>
+<li>Noise's <code>HKDF(ck, ikm, n)</code> is computed as <code>HKDF&lt;SHA256&gt;.deriveKey(inputKeyMaterial: ikm, salt: ck, info: [], outputByteCount: 32·n)</code>. RFC 5869 with empty info yields the same <code>output1 ‖ output2 ‖ output3</code> as Noise §4.3. This equivalence is pinned by vectors.</li>
+<li><code>CipherState</code> uses ChaChaPoly with the nonce from the notation section.</li>
+</ul>
+<pre><code>psk      = epoch secret (pairSecret for epoch 0)
+hintKey  = HKDF(psk, &quot;&quot;, &quot;SBL1 hint key&quot;, 32)
+tag8     = HMAC(hintKey, eI.pub)[..8]
+prologue = lp(&quot;SpacebackLink v1 session&quot;) ‖ u8 major ‖ u32 keyEpoch ‖ tag8
+           (bulk: lp(&quot;SpacebackLink v1 bulk&quot;) ‖ u8 major ‖ u32 keyEpoch ‖ tag8 ‖ controlExporter[..16])
+
+KKpsk2:
+  -&gt; s                           pre-message: MixHash(agreeI.pub)
+  &lt;- s                           pre-message: MixHash(agreeR.pub)
+  ...
+  -&gt; e, es, ss                   S1 body = tag8 ‖ message1   payload = ClientHello
+  &lt;- e, ee, se, psk              S2 body = message2          payload = ServerHello
+S3 I→R first transport message: Finished{}
+exporter = GetHandshakeHash() after S2 (32 bytes)
+Split() → kI2R (I's send), kR2I
+</code></pre>
+<p>The pre-message statics are the <code>agree</code> keys. <code>KK</code> hashes both statics before the first message, and the prologue binds the version, the key epoch and the routing tag. The signing keys and peerIDs enter the pairing transcript (<code>IdentityI</code>/<code>IdentityR</code> signatures, <code>T1</code> → psk), so the psk binds them too.</p>
+<p>In <code>psk</code> handshakes the <code>e</code> token also performs <code>MixKey(e.pub)</code> (Noise §9.2). <code>ServerHello</code> is encrypted with <code>EncryptAndHash</code>, so its AD is the handshake hash, which already covers all of S1 and <code>eR.pub</code>.</p>
+<p><strong>Ephemerals.</strong> <code>eI</code> and <code>eR</code> are generated inside a single-use <code>HandshakeState</code> for each TCP connection. A second use of the same <code>HandshakeState</code> traps in debug and throws in release, and a test asserts it. R keeps a 10-minute replay cache of <code>eI.pub</code> and rejects repeats.</p>
+<p><strong>S1 handling on R.</strong></p>
+<ul>
+<li>R looks up <code>tag8</code> among the current and pending epochs of paired peers, and then among tombstones (§2.6).</li>
+<li>On no match or a failed decryption, it closes silently after a random 0–300 ms.</li>
+</ul>
+<p><strong>Authentication.</strong> R treats I as authenticated only after decrypting S3. Before S3, the <code>ClientHello</code> payload is exposed to key-compromise impersonation, so R acts only on its version and caps. I treats R as authenticated after S2 decrypts.</p>
+<p><strong>Security properties.</strong></p>
+<ul>
+<li><strong>Forward secrecy:</strong> from <code>ee</code> and <code>se</code>.</li>
+<li><strong>Mutual authentication:</strong> from the <code>KK</code> statics plus the psk.</li>
+<li><strong>Revocation:</strong> deleting the psk prevents any new session. Tombstones hold no psk (§2.6).</li>
+</ul>
+<p><strong>Hellos.</strong> <code>ClientHello{minors, caps}</code> and <code>ServerHello{minor, caps, sessionID}</code> are covered by the handshake hash, which prevents downgrade.</p>
+<h3>3.2 Records and replay</h3>
+<p><strong>Records.</strong> After <code>Split</code>, each direction is a Noise <code>CipherState</code> with an implicit counter.</p>
+<ul>
+<li>Records use <code>EncryptWithAd(ad: 8-byte frame header, plaintext)</code>. This extends Noise transport, whose AD is empty, and is covered by our own vectors.</li>
+<li>The counter increments by exactly 1. Over TCP, any replay, gap or reordering fails decryption and closes the connection.</li>
+</ul>
+<p><strong>Limits.</strong> Rehandshake at 2⁴⁰ records or after 12 h.</p>
+<p><strong>Requests.</strong> Request IDs are unique per session. Destructive challenges are single-use.</p>
+<ul>
+<li><strong>Write order (R2, revision 3.1).</strong> A record's nonce is its position on the wire, so sealing and sending are one step: each side holds a FIFO gate from before <code>EncryptWithAd</code> until the pipe has taken the frame. Replies, notifications, errors and <code>bye</code> all go through it. Without it, two writers that seal back to back can reach the socket in the opposite order and the receiver closes the connection.</li>
+<li><strong>Reply slots (R1 of the verification, revision 3.1).</strong> A request's reply slot exists before its record is written. A reply, a close, a timeout or a cancellation that arrives while the write is still in progress settles the slot, and the sender reads it when the write returns. A request therefore never waits forever.</li>
+<li><strong>Request timeout.</strong> 40 s (<code>LinkSession.defaultRequestTimeout</code>), the §3.4 liveness bound: a healthy peer is never silent that long, and requests are answered one at a time, so this is also the most a queue of slow handlers may delay one. A timed-out request fails with <code>timedOut</code> and the session stays open. Report it as "Interrupted".</li>
+<li><strong>Late and unsolicited replies.</strong> Only replies carry <code>re</code>. One that matches no waiting request is dropped, never answered — answering it would turn a late reply into an error ping-pong. The exception is an <code>error</code> whose <code>re</code> names one of our <em>notifications</em>: it has no waiter by design and is delivered as an event. An <code>error</code> answering a request this side already gave up on is dropped like any late reply.</li>
+<li><strong>Back-off.</strong> <code>error.retryAfter</code> is in milliseconds. The requester surfaces it with the code (<code>LinkRequestError{code, retryAfter}</code>), clamped to 0…1 h, and waits that long before asking again.</li>
+<li><strong>Grants checked on receipt.</strong> A session checks each message's capability against the grants in force on the link: its own served half plus the peer's half as the peer last reported it (§5.1), each cut to what may cross between the two classes (<code>GrantOwnership.inForce</code>, PROTOCOL-TV B4). The peer's half is what admits the peer's side of a flow that peer serves, such as <code>copy.offer</code> under the iPhone's <code>phone.copy</code> arriving at the Mac. The route check (§4.2, PROTOCOL-TV B3) runs first, so the peer's half never admits a request for our own data.</li>
+</ul>
+<p><strong>Truncation.</strong> A TCP close without a sealed <code>bye</code> is an <strong>interruption</strong>. If a request, a page, a Trash commit or a copy was in flight, the UI reports "Interrupted", never completion. A Trash commit's outcome is re-read with <code>trash.result{challengeID}</code> on the next session (§5.2).</p>
+<h2>4. Framing</h2>
+<h3>4.1 Frame</h3>
+<pre><code>| kind u8 | major u8 | flags u16 | length u32 BE | body |
+kind 0x01 pairing-plain ≤4 KiB (P0–P3, pre-P3 aborts)
+     0x04 pairing-sealed ≤16 KiB (P4–P6, sealed aborts, PairExtend (A1), PairCodeRejected (A10));
+          plaintext is always `u8 msg ‖ JSON` (A10)
+     0x02 handshake ≤4 KiB (S1, S2, Revoked, RevokeNotice)
+     0x03 record ≤1 MiB+16
+</code></pre>
+<p><strong>Parsing.</strong> <code>LinkFramer</code> uses <code>parseInput</code> and <code>deliverInputNoCopy</code> and hands off to a pure <code>FrameParser</code>. It closes silently on an oversize length, or on a frame kind that is wrong for the current state. Examples: <code>0x01</code> after P3; a plaintext <code>PairAbort</code> after P3, which is ignored.</p>
+<p><strong>Record plaintext.</strong> <code>u32 jsonLen ‖ JSON Envelope ‖ attachment</code>.</p>
+<ul>
+<li>JSON ≤256 KiB, attachment ≤512 KiB.</li>
+<li>JSON uses sorted keys; dates are Int64 milliseconds.</li>
+</ul>
+<footer>Spaceback · Published to make the protocol's cryptographic functionality public. Questions: see <a href="./">the Spaceback page</a>.</footer>
+</main></body></html>
